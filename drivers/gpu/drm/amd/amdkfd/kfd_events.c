@@ -107,6 +107,9 @@ static int allocate_event_notification_slot(struct kfd_process *p,
 	}
 
 	if (restore_id) {
+		if (*restore_id >= KFD_SIGNAL_EVENT_LIMIT)
+			return -EINVAL;
+
 		id = idr_alloc(&p->event_idr, ev, *restore_id, *restore_id + 1,
 				GFP_KERNEL);
 	} else {
@@ -142,6 +145,7 @@ static struct kfd_event *lookup_event_by_id(struct kfd_process *p, uint32_t id)
  * @p:     Pointer to struct kfd_process
  * @id:    ID to look up
  * @bits:  Number of valid bits in @id
+ * @signal_mailbox_updated: flag indicates if FW updates signal mailbox entry
  *
  * Finds the first signaled event with a matching partial ID. If no
  * matching signaled event is found, returns NULL. In that case the
@@ -155,7 +159,8 @@ static struct kfd_event *lookup_event_by_id(struct kfd_process *p, uint32_t id)
  * driver.
  */
 static struct kfd_event *lookup_signaled_event_by_partial_id(
-	struct kfd_process *p, uint32_t id, uint32_t bits)
+	struct kfd_process *p, uint32_t id, uint32_t bits,
+	bool signal_mailbox_updated)
 {
 	struct kfd_event *ev;
 
@@ -166,7 +171,8 @@ static struct kfd_event *lookup_signaled_event_by_partial_id(
 	 * and we only need a single lookup.
 	 */
 	if (bits > 31 || (1U << bits) >= KFD_SIGNAL_EVENT_LIMIT) {
-		if (page_slots(p->signal_page)[id] == UNSIGNALED_EVENT_SLOT)
+		if (signal_mailbox_updated &&
+		    page_slots(p->signal_page)[id] == UNSIGNALED_EVENT_SLOT)
 			return NULL;
 
 		return idr_find(&p->event_idr, id);
@@ -201,7 +207,7 @@ static int create_signal_event(struct file *devkfd, struct kfd_process *p,
 
 	ret = allocate_event_notification_slot(p, ev, restore_id);
 	if (ret) {
-		pr_warn("Signal event wasn't created because out of kernel memory\n");
+		pr_warn("Failed to create signal event notification slot\n");
 		return ret;
 	}
 
@@ -480,6 +486,11 @@ int kfd_criu_restore_event(struct file *devkfd,
 	}
 	*priv_data_offset += sizeof(*ev_priv);
 
+	if (ev_priv->event_id > INT_MAX) {
+		ret = -EINVAL;
+		goto exit;
+	}
+
 	if (ev_priv->user_handle) {
 		ret = kfd_kmap_event_page(p, ev_priv->user_handle);
 		if (ret)
@@ -724,7 +735,7 @@ static void set_event_from_interrupt(struct kfd_process *p,
 }
 
 void kfd_signal_event_interrupt(u32 pasid, uint32_t partial_id,
-				uint32_t valid_id_bits)
+				uint32_t valid_id_bits, bool signal_mailbox_updated)
 {
 	struct kfd_event *ev = NULL;
 
@@ -742,7 +753,8 @@ void kfd_signal_event_interrupt(u32 pasid, uint32_t partial_id,
 
 	if (valid_id_bits)
 		ev = lookup_signaled_event_by_partial_id(p, partial_id,
-							 valid_id_bits);
+							 valid_id_bits,
+							 signal_mailbox_updated);
 	if (ev) {
 		set_event_from_interrupt(p, ev);
 	} else if (p->signal_page) {
@@ -791,6 +803,8 @@ static struct kfd_event_waiter *alloc_event_waiters(uint32_t num_events)
 	struct kfd_event_waiter *event_waiters;
 	uint32_t i;
 
+	if (num_events > KFD_SIGNAL_EVENT_LIMIT)
+		return NULL;
 	event_waiters = kzalloc_objs(struct kfd_event_waiter, num_events);
 	if (!event_waiters)
 		return NULL;

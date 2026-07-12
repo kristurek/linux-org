@@ -17,7 +17,6 @@
 #include <linux/gpio/property.h>
 #include <linux/mfd/cs42l43.h>
 #include <linux/mfd/cs42l43-regs.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
@@ -367,9 +366,9 @@ static int cs42l43_spi_probe(struct platform_device *pdev)
 		ret = devm_add_action_or_reset(priv->dev, cs42l43_release_of_node, fwnode);
 		if (ret)
 			return ret;
+	} else {
+		fwnode_property_read_u32(xu_fwnode, "01fa-sidecar-instances", &nsidecars);
 	}
-
-	fwnode_property_read_u32(xu_fwnode, "01fa-sidecar-instances", &nsidecars);
 
 	/*
 	 * Depending on the value of nsidecars we either create a software node
@@ -438,8 +437,8 @@ static int cs42l43_spi_probe(struct platform_device *pdev)
 }
 
 static const struct platform_device_id cs42l43_spi_id_table[] = {
-	{ "cs42l43-spi", },
-	{}
+	{ .name = "cs42l43-spi" },
+	{ }
 };
 MODULE_DEVICE_TABLE(platform, cs42l43_spi_id_table);
 

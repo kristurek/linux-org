@@ -11,7 +11,6 @@
 #include <linux/miscdevice.h>
 #include <linux/mm.h>
 #include <linux/module.h>
-#include <linux/mod_devicetable.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
 #include <linux/set_memory.h>
@@ -307,6 +306,11 @@ static int tdx_report_new_locked(struct tsm_report *report, void *data)
 	if (ret) {
 		pr_err("GetQuote request timedout\n");
 		return ret;
+	}
+
+	if (quote_buf->status != GET_QUOTE_SUCCESS) {
+		pr_debug("GetQuote request failed, status:%llx\n", quote_buf->status);
+		return -EIO;
 	}
 
 	out_len = READ_ONCE(quote_buf->out_len);

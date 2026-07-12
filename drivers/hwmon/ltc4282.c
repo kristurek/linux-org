@@ -16,7 +16,6 @@
 #include <linux/math.h>
 #include <linux/minmax.h>
 #include <linux/module.h>
-#include <linux/mod_devicetable.h>
 #include <linux/regmap.h>
 #include <linux/property.h>
 #include <linux/string.h>
@@ -1328,15 +1327,16 @@ static int ltc4282_setup(struct ltc4282_state *st, struct device *dev)
 	if (ret)
 		return ret;
 
+	/* default to 1 milli-ohm so we can probe without FW properties */
+	st->rsense = 1 * (NANO / MILLI);
 	ret = device_property_read_u32(dev, "adi,rsense-nano-ohms",
 				       &st->rsense);
-	if (ret)
-		return dev_err_probe(dev, ret,
-				     "Failed to read adi,rsense-nano-ohms\n");
-	if (st->rsense < CENTI)
-		return dev_err_probe(dev, -EINVAL,
-				     "adi,rsense-nano-ohms too small (< %lu)\n",
-				     CENTI);
+	if (!ret) {
+		if (st->rsense < CENTI)
+			return dev_err_probe(dev, -EINVAL,
+					     "adi,rsense-nano-ohms too small (< %lu)\n",
+					     CENTI);
+	}
 
 	/*
 	 * The resolution for rsense is tenths of micro (eg: 62.5 uOhm) which
