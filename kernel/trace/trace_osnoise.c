@@ -83,6 +83,7 @@ struct osnoise_instance {
 
 static struct list_head osnoise_instances;
 
+__printf(1, 2)
 static void osnoise_print(const char *fmt, ...)
 {
 	struct osnoise_instance *inst;
@@ -179,7 +180,9 @@ static void osnoise_unregister_instance(struct trace_array *tr)
 	if (!found)
 		return;
 
-	kvfree_rcu_mightsleep(inst);
+	/* Do a full sync to ensure that tr remains valid, not just inst */
+	synchronize_rcu();
+	kvfree(inst);
 }
 
 /*

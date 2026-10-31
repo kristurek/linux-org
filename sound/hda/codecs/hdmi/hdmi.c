@@ -983,7 +983,8 @@ static int hdmi_read_pin_conn(struct hda_codec *codec, int pin_idx)
 	snd_hda_set_dev_select(codec, pin_nid, dev_id);
 
 	if (spec->intel_hsw_fixup) {
-		conns = spec->num_cvts;
+		/* spec->cvt_nids[] only has ARRAY_SIZE(spec->cvt_nids) slots */
+		conns = min_t(int, spec->num_cvts, ARRAY_SIZE(spec->cvt_nids));
 		memcpy(per_pin->mux_nids, spec->cvt_nids,
 		       sizeof(hda_nid_t) * conns);
 	} else {
@@ -1671,7 +1672,7 @@ int snd_hda_hdmi_generic_pcm_prepare(struct hda_pcm_stream *hinfo,
 	 * After S3, the audio driver restores pin:cvt selections
 	 * but this can happen before gfx is ready and such selection
 	 * is overlooked by HW. Thus multiple pins can share a same
-	 * default convertor and mute control will affect each other,
+	 * default converter and mute control will affect each other,
 	 * which can cause a resumed audio playback become silent
 	 * after S3.
 	 */
@@ -1687,6 +1688,9 @@ int snd_hda_hdmi_generic_pcm_prepare(struct hda_pcm_stream *hinfo,
 	scoped_guard(mutex, &per_pin->lock) {
 		per_pin->channels = substream->runtime->channels;
 		per_pin->setup = true;
+
+		if (spec->ops.prepare)
+			spec->ops.prepare(codec, per_pin);
 
 		if (get_wcaps(codec, cvt_nid) & AC_WCAP_STRIPE) {
 			stripe = snd_hdac_get_stream_stripe_ctl(&codec->bus->core,
@@ -2233,8 +2237,10 @@ void snd_hda_hdmi_acomp_pin_eld_notify(void *audio_ptr, int port, int dev_id)
 	/* skip notification during system suspend (but not in runtime PM);
 	 * the state will be updated at resume
 	 */
-	if (codec->core.dev.power.power_state.event == PM_EVENT_SUSPEND)
+	if (codec->core.dev.power.power_state.event == PM_EVENT_SUSPEND) {
+		codec->acomp_requested_resume = 1;
 		return;
+	}
 
 	snd_hda_hdmi_check_presence_and_report(codec, pin_nid, dev_id);
 }
@@ -2343,6 +2349,7 @@ static const struct hda_device_id snd_hda_id_generichdmi[] = {
 	HDA_CODEC_ID_MODEL(0x1d179f8e, "KX-7000 HDMI/DP",	MODEL_GF),
 	HDA_CODEC_ID_MODEL(0x1d179f8f, "KX-7000 HDMI/DP",	MODEL_GF),
 	HDA_CODEC_ID_MODEL(0x1d179f90, "KX-7000 HDMI/DP",	MODEL_GF),
+	HDA_CODEC_ID_MODEL(0x4c545020, "Lisuan HDMI/DP",	MODEL_GENERIC),
 	HDA_CODEC_ID_MODEL(0x67663d82, "Arise 82 HDMI/DP",	MODEL_GF),
 	HDA_CODEC_ID_MODEL(0x67663d83, "Arise 83 HDMI/DP",	MODEL_GF),
 	HDA_CODEC_ID_MODEL(0x67663d84, "Arise 84 HDMI/DP",	MODEL_GF),

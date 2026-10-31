@@ -59,7 +59,7 @@ advantechwdt:
 
 alim1535_wdt:
     timeout:
-	Watchdog timeout in seconds. (0 < timeout < 18000, default=60
+	Watchdog timeout in seconds. (0 < timeout < 18000, default=60)
     nowayout:
 	Watchdog cannot be stopped once started
 	(default=kernel config parameter)
@@ -68,7 +68,7 @@ alim1535_wdt:
 
 alim7101_wdt:
     timeout:
-	Watchdog timeout in seconds. (1<=timeout<=3600, default=30
+	Watchdog timeout in seconds. (1<=timeout<=3600, default=30)
     use_gpio:
 	Use the gpio watchdog (required by old cobalt boards).
 	default=0/off/no
@@ -515,6 +515,8 @@ sbsa_gwdt:
     nowayout:
 	Watchdog cannot be stopped once started
 	(default=kernel config parameter)
+    early_enable:
+	Watchdog is started on module insertion (default=0)
 
 -------------------------------------------------
 

@@ -41,6 +41,7 @@ static struct bpf_map *sock_map_alloc(union bpf_attr *attr)
 	struct bpf_stab *stab;
 
 	if (attr->max_entries == 0 ||
+	    attr->max_entries > INT_MAX ||
 	    attr->key_size    != 4 ||
 	    (attr->value_size != sizeof(u32) &&
 	     attr->value_size != sizeof(u64)) ||
@@ -392,8 +393,8 @@ static void *sock_map_lookup(struct bpf_map *map, void *key)
 	sk = __sock_map_lookup_elem(map, *(u32 *)key);
 	if (!sk)
 		return NULL;
-	if (sk_is_refcounted(sk) && !refcount_inc_not_zero(&sk->sk_refcnt))
-		return NULL;
+	if (sk_is_refcounted(sk))
+		sock_hold(sk);
 	return sk;
 }
 
@@ -542,6 +543,8 @@ static bool sock_map_sk_state_allowed(const struct sock *sk)
 {
 	if (sk_is_tcp(sk))
 		return (1 << sk->sk_state) & (TCPF_ESTABLISHED | TCPF_LISTEN);
+	if (sk_is_udp(sk))
+		return sk_hashed(sk);
 	if (sk_is_stream_unix(sk))
 		return (1 << READ_ONCE(sk->sk_state)) & TCPF_ESTABLISHED;
 	if (sk_is_vsock(sk) &&
@@ -1216,8 +1219,8 @@ static void *sock_hash_lookup(struct bpf_map *map, void *key)
 	sk = __sock_hash_lookup_elem(map, key);
 	if (!sk)
 		return NULL;
-	if (sk_is_refcounted(sk) && !refcount_inc_not_zero(&sk->sk_refcnt))
-		return NULL;
+	if (sk_is_refcounted(sk))
+		sock_hold(sk);
 	return sk;
 }
 
@@ -1930,6 +1933,15 @@ out:
 	return ret;
 }
 
+static int sock_map_iter_check_prog(const struct bpf_prog *prog,
+				    const struct bpf_iter_aux_info *aux)
+{
+	if (prog->aux->max_rdonly_access > aux->map->key_size)
+		return -EACCES;
+
+	return 0;
+}
+
 static int sock_map_iter_attach_target(struct bpf_prog *prog,
 				       union bpf_iter_link_info *linfo,
 				       struct bpf_iter_aux_info *aux)
@@ -1948,12 +1960,11 @@ static int sock_map_iter_attach_target(struct bpf_prog *prog,
 	    map->map_type != BPF_MAP_TYPE_SOCKHASH)
 		goto put_map;
 
-	if (prog->aux->max_rdonly_access > map->key_size) {
-		err = -EACCES;
-		goto put_map;
-	}
-
 	aux->map = map;
+	err = sock_map_iter_check_prog(prog, aux);
+	if (err)
+		goto put_map;
+
 	return 0;
 
 put_map:
@@ -1970,6 +1981,7 @@ static struct bpf_iter_reg sock_map_iter_reg = {
 	.target			= "sockmap",
 	.attach_target		= sock_map_iter_attach_target,
 	.detach_target		= sock_map_iter_detach_target,
+	.check_prog		= sock_map_iter_check_prog,
 	.show_fdinfo		= bpf_iter_map_show_fdinfo,
 	.fill_link_info		= bpf_iter_map_fill_link_info,
 	.ctx_arg_info_size	= 2,

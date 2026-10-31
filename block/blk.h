@@ -332,6 +332,20 @@ static inline void bio_integrity_free(struct bio *bio)
 unsigned long blk_rq_timeout(unsigned long timeout);
 void blk_add_timer(struct request *req);
 
+/*
+ * The timeout handler changes RQF_TIMED_OUT in a request which it does not
+ * own: whoever completes it changes rq_flags at the same time, with plain
+ * loads and stores. Never write back a flag that has changed under us.
+ */
+static inline void blk_rq_change_timed_out(struct request *rq, bool set)
+{
+	req_flags_t old = READ_ONCE(rq->rq_flags), new;
+
+	do {
+		new = set ? old | RQF_TIMED_OUT : old & ~RQF_TIMED_OUT;
+	} while (!try_cmpxchg(&rq->rq_flags, &old, new));
+}
+
 enum bio_merge_status {
 	BIO_MERGE_OK,
 	BIO_MERGE_NONE,
@@ -406,7 +420,7 @@ static inline bool bio_may_need_split(struct bio *bio,
 		return true;
 
 	bv = __bvec_iter_bvec(bio->bi_io_vec, bio->bi_iter);
-	if (bio->bi_iter.bi_size > bv->bv_len - bio->bi_iter.bi_bvec_done)
+	if (bio->bi_iter.bi_size > bv->bv_len - bio->bi_iter.bi_offset)
 		return true;
 	if ((bv->bv_offset | bv->bv_len) & lim->dma_alignment)
 		return true;
@@ -577,6 +591,7 @@ int blkdev_report_zones_ioctl(struct block_device *bdev, unsigned int cmd,
 		unsigned long arg);
 int blkdev_zone_mgmt_ioctl(struct block_device *bdev, blk_mode_t mode,
 		unsigned int cmd, unsigned long arg);
+bool bdev_zone_mgmt_allowed(struct block_device *bdev, sector_t sector);
 #else /* CONFIG_BLK_DEV_ZONED */
 static inline void disk_init_zone_resources(struct gendisk *disk)
 {
@@ -618,6 +633,11 @@ static inline int blkdev_zone_mgmt_ioctl(struct block_device *bdev,
 		blk_mode_t mode, unsigned int cmd, unsigned long arg)
 {
 	return -ENOTTY;
+}
+static inline bool bdev_zone_mgmt_allowed(struct block_device *bdev,
+					  sector_t sector)
+{
+	return false;
 }
 #endif /* CONFIG_BLK_DEV_ZONED */
 
@@ -717,6 +737,7 @@ static inline int req_ref_read(struct request *req)
 static inline u64 blk_time_get_ns(void)
 {
 	struct blk_plug *plug = current->plug;
+	u64 now;
 
 	if (!plug || !in_task())
 		return ktime_get_ns();
@@ -725,12 +746,18 @@ static inline u64 blk_time_get_ns(void)
 	 * 0 could very well be a valid time, but rather than flag "this is
 	 * a valid timestamp" separately, just accept that we'll do an extra
 	 * ktime_get_ns() if we just happen to get 0 as the current time.
+	 *
+	 * cur_ktime can be zeroed by pre-emption the moment PF_BLOCK_TS is set.
 	 */
-	if (!plug->cur_ktime) {
-		plug->cur_ktime = ktime_get_ns();
+	now = READ_ONCE(plug->cur_ktime);
+	if (!now) {
+		now = ktime_get_ns();
+		WRITE_ONCE(plug->cur_ktime, now);
+		/* Ensure PF_BLOCK_TS is set after cur_ktime. */
+		barrier();
 		current->flags |= PF_BLOCK_TS;
 	}
-	return plug->cur_ktime;
+	return now;
 }
 
 static inline ktime_t blk_time_get(void)

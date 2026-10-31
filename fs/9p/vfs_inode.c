@@ -645,7 +645,6 @@ error:
  * @dir: The parent directory
  * @dentry: The name of file to be created
  * @mode: The UNIX file mode to set
- * @excl: True if the file must not yet exist
  *
  * open(.., O_CREAT) is handled in v9fs_vfs_atomic_open().  This is only called
  * for mknod(2).
@@ -653,8 +652,8 @@ error:
  */
 
 static int
-v9fs_vfs_create(struct mnt_idmap *idmap, struct inode *dir,
-		struct dentry *dentry, umode_t mode, bool excl)
+v9fs_vfs_create(const struct mnt_idmap *idmap, struct inode *dir,
+		struct dentry *dentry, umode_t mode)
 {
 	struct v9fs_session_info *v9ses = v9fs_inode2v9ses(dir);
 	u32 perm = unixmode2p9mode(v9ses, mode);
@@ -680,7 +679,7 @@ v9fs_vfs_create(struct mnt_idmap *idmap, struct inode *dir,
  *
  */
 
-static struct dentry *v9fs_vfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
+static struct dentry *v9fs_vfs_mkdir(const struct mnt_idmap *idmap, struct inode *dir,
 				     struct dentry *dentry, umode_t mode)
 {
 	u32 perm;
@@ -689,7 +688,7 @@ static struct dentry *v9fs_vfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
 
 	p9_debug(P9_DEBUG_VFS, "name %pd\n", dentry);
 	v9ses = v9fs_inode2v9ses(dir);
-	perm = unixmode2p9mode(v9ses, mode | S_IFDIR);
+	perm = unixmode2p9mode(v9ses, mode);
 	fid = v9fs_create(v9ses, dir, dentry, NULL, perm, P9_OREAD);
 	if (IS_ERR(fid))
 		return ERR_CAST(fid);
@@ -859,7 +858,7 @@ int v9fs_vfs_rmdir(struct inode *i, struct dentry *d)
  */
 
 int
-v9fs_vfs_rename(struct mnt_idmap *idmap, struct inode *old_dir,
+v9fs_vfs_rename(const struct mnt_idmap *idmap, struct inode *old_dir,
 		struct dentry *old_dentry, struct inode *new_dir,
 		struct dentry *new_dentry, unsigned int flags)
 {
@@ -967,7 +966,7 @@ error:
  */
 
 static int
-v9fs_vfs_getattr(struct mnt_idmap *idmap, const struct path *path,
+v9fs_vfs_getattr(const struct mnt_idmap *idmap, const struct path *path,
 		 struct kstat *stat, u32 request_mask, unsigned int flags)
 {
 	struct dentry *dentry = path->dentry;
@@ -1015,7 +1014,7 @@ v9fs_vfs_getattr(struct mnt_idmap *idmap, const struct path *path,
  *
  */
 
-static int v9fs_vfs_setattr(struct mnt_idmap *idmap,
+static int v9fs_vfs_setattr(const struct mnt_idmap *idmap,
 			    struct dentry *dentry, struct iattr *iattr)
 {
 	int retval, use_dentry = 0;
@@ -1023,6 +1022,9 @@ static int v9fs_vfs_setattr(struct mnt_idmap *idmap,
 	struct v9fs_session_info *v9ses;
 	struct p9_fid *fid = NULL;
 	struct p9_wstat wstat;
+#ifdef CONFIG_9P_FSCACHE
+	uoff_t old_size = i_size_read(inode);
+#endif
 
 	p9_debug(P9_DEBUG_VFS, "\n");
 	retval = setattr_prepare(&nop_mnt_idmap, dentry, iattr);
@@ -1087,7 +1089,8 @@ static int v9fs_vfs_setattr(struct mnt_idmap *idmap,
 		if (v9ses->cache & CACHE_FSCACHE) {
 			struct v9fs_inode *v9inode = V9FS_I(inode);
 
-			fscache_resize_cookie(v9fs_inode_cookie(v9inode), iattr->ia_size);
+			fscache_resize_cookie(v9fs_inode_cookie(v9inode),
+					      iattr->ia_size, iattr->ia_size < old_size);
 		}
 #endif
 	}
@@ -1250,7 +1253,7 @@ static int v9fs_vfs_mkspecial(struct inode *dir, struct dentry *dentry,
  */
 
 static int
-v9fs_vfs_symlink(struct mnt_idmap *idmap, struct inode *dir,
+v9fs_vfs_symlink(const struct mnt_idmap *idmap, struct inode *dir,
 		 struct dentry *dentry, const char *symname)
 {
 	p9_debug(P9_DEBUG_VFS, " %llu,%pd,%s\n",
@@ -1305,7 +1308,7 @@ v9fs_vfs_link(struct dentry *old_dentry, struct inode *dir,
  */
 
 static int
-v9fs_vfs_mknod(struct mnt_idmap *idmap, struct inode *dir,
+v9fs_vfs_mknod(const struct mnt_idmap *idmap, struct inode *dir,
 	       struct dentry *dentry, umode_t mode, dev_t rdev)
 {
 	struct v9fs_session_info *v9ses = v9fs_inode2v9ses(dir);

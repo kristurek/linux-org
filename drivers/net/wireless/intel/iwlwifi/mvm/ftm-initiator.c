@@ -7,7 +7,7 @@
 #include <linux/math64.h>
 #include <net/cfg80211.h>
 #include "mvm.h"
-#include "iwl-io.h"
+#include "iwl-trans.h"
 #include "iwl-prph.h"
 #include "constants.h"
 
@@ -519,8 +519,9 @@ static int iwl_mvm_ftm_send_cmd(struct iwl_mvm *mvm, struct iwl_host_cmd *hcmd)
 	return err;
 }
 
-static int iwl_mvm_ftm_start_v5(struct iwl_mvm *mvm, struct ieee80211_vif *vif,
-				struct cfg80211_pmsr_request *req)
+static int noinline_for_stack
+iwl_mvm_ftm_start_v5(struct iwl_mvm *mvm, struct ieee80211_vif *vif,
+		     struct cfg80211_pmsr_request *req)
 {
 	struct iwl_tof_range_req_cmd_v5 cmd_v5;
 	struct iwl_host_cmd hcmd = {
@@ -545,8 +546,9 @@ static int iwl_mvm_ftm_start_v5(struct iwl_mvm *mvm, struct ieee80211_vif *vif,
 	return iwl_mvm_ftm_send_cmd(mvm, &hcmd);
 }
 
-static int iwl_mvm_ftm_start_v7(struct iwl_mvm *mvm, struct ieee80211_vif *vif,
-				struct cfg80211_pmsr_request *req)
+static int noinline_for_stack
+iwl_mvm_ftm_start_v7(struct iwl_mvm *mvm, struct ieee80211_vif *vif,
+		     struct cfg80211_pmsr_request *req)
 {
 	struct iwl_tof_range_req_cmd_v7 cmd_v7;
 	struct iwl_host_cmd hcmd = {
@@ -575,8 +577,9 @@ static int iwl_mvm_ftm_start_v7(struct iwl_mvm *mvm, struct ieee80211_vif *vif,
 	return iwl_mvm_ftm_send_cmd(mvm, &hcmd);
 }
 
-static int iwl_mvm_ftm_start_v8(struct iwl_mvm *mvm, struct ieee80211_vif *vif,
-				struct cfg80211_pmsr_request *req)
+static int noinline_for_stack
+iwl_mvm_ftm_start_v8(struct iwl_mvm *mvm, struct ieee80211_vif *vif,
+		     struct cfg80211_pmsr_request *req)
 {
 	struct iwl_tof_range_req_cmd_v8 cmd;
 	struct iwl_host_cmd hcmd = {
@@ -601,8 +604,10 @@ static int iwl_mvm_ftm_start_v8(struct iwl_mvm *mvm, struct ieee80211_vif *vif,
 	return iwl_mvm_ftm_send_cmd(mvm, &hcmd);
 }
 
-static int iwl_mvm_ftm_start_v9(struct iwl_mvm *mvm, struct ieee80211_vif *vif,
-				struct cfg80211_pmsr_request *req)
+
+static int noinline_for_stack
+iwl_mvm_ftm_start_v9(struct iwl_mvm *mvm, struct ieee80211_vif *vif,
+		     struct cfg80211_pmsr_request *req)
 {
 	struct iwl_tof_range_req_cmd_v9 cmd;
 	struct iwl_host_cmd hcmd = {
@@ -646,7 +651,8 @@ static void iter(struct ieee80211_hw *hw,
 	WARN_ON(*target->cipher == IWL_LOCATION_CIPHER_INVALID);
 }
 
-static void
+/* The tk buffer is assumed to be exactly TK_11AZ_LEN bytes */
+static int
 iwl_mvm_ftm_set_secured_ranging(struct iwl_mvm *mvm, struct ieee80211_vif *vif,
 				u8 *bssid, u8 *cipher, u8 *hltk, u8 *tk,
 				u8 *rx_pn, u8 *tx_pn, __le32 *flags)
@@ -656,12 +662,12 @@ iwl_mvm_ftm_set_secured_ranging(struct iwl_mvm *mvm, struct ieee80211_vif *vif,
 	struct iwl_mvm_vif *mvmvif = iwl_mvm_vif_from_mac80211(vif);
 
 	if (mvmvif->ftm_unprotected)
-		return;
+		return 0;
 #endif
 
 	if (!(le32_to_cpu(*flags) & (IWL_INITIATOR_AP_FLAGS_NON_TB |
 		       IWL_INITIATOR_AP_FLAGS_TB)))
-		return;
+		return 0;
 
 	lockdep_assert_held(&mvm->mutex);
 
@@ -679,14 +685,31 @@ iwl_mvm_ftm_set_secured_ranging(struct iwl_mvm *mvm, struct ieee80211_vif *vif,
 		if (vif->cfg.assoc &&
 		    !memcmp(vif->bss_conf.bssid, bssid, ETH_ALEN)) {
 			struct iwl_mvm_ftm_iter_data target;
+			u32 key_len;
 
 			target.bssid = bssid;
 			target.cipher = cipher;
 			target.tk = NULL;
 			ieee80211_iter_keys(mvm->hw, vif, iter, &target);
 
-			if (!WARN_ON(!target.tk))
-				memcpy(tk, target.tk, TK_11AZ_LEN);
+			if (WARN_ON(!target.tk))
+				return -EINVAL;
+
+			switch (*target.cipher) {
+			case IWL_LOCATION_CIPHER_CCMP_128:
+			case IWL_LOCATION_CIPHER_GCMP_128:
+				key_len = WLAN_KEY_LEN_CCMP;
+				break;
+			case IWL_LOCATION_CIPHER_GCMP_256:
+				key_len = WLAN_KEY_LEN_GCMP_256;
+				break;
+			default:
+				WARN_ON(1);
+				return -EINVAL;
+			}
+
+			memset(tk, 0, TK_11AZ_LEN);
+			memcpy(tk, target.tk, key_len);
 		} else {
 			memcpy(tk, entry->tk, sizeof(entry->tk));
 		}
@@ -695,8 +718,10 @@ iwl_mvm_ftm_set_secured_ranging(struct iwl_mvm *mvm, struct ieee80211_vif *vif,
 		memcpy(tx_pn, entry->tx_pn, sizeof(entry->tx_pn));
 
 		FTM_SET_FLAG(SECURED);
-		return;
+		return 0;
 	}
+
+	return 0;
 }
 
 static int
@@ -708,17 +733,17 @@ iwl_mvm_ftm_put_target_v7(struct iwl_mvm *mvm, struct ieee80211_vif *vif,
 	if (err)
 		return err;
 
-	iwl_mvm_ftm_set_secured_ranging(mvm, vif, target->bssid,
-					&target->cipher, target->hltk,
-					target->tk, target->rx_pn,
-					target->tx_pn,
-					&target->initiator_ap_flags);
-	return err;
+	return iwl_mvm_ftm_set_secured_ranging(mvm, vif, target->bssid,
+					      &target->cipher, target->hltk,
+					      target->tk, target->rx_pn,
+					      target->tx_pn,
+					      &target->initiator_ap_flags);
 }
 
-static int iwl_mvm_ftm_start_v11(struct iwl_mvm *mvm,
-				 struct ieee80211_vif *vif,
-				 struct cfg80211_pmsr_request *req)
+static int noinline_for_stack
+iwl_mvm_ftm_start_v11(struct iwl_mvm *mvm,
+		      struct ieee80211_vif *vif,
+		      struct cfg80211_pmsr_request *req)
 {
 	struct iwl_tof_range_req_cmd_v11 cmd;
 	struct iwl_host_cmd hcmd = {
@@ -788,9 +813,10 @@ iwl_mvm_ftm_put_target_v8(struct iwl_mvm *mvm, struct ieee80211_vif *vif,
 	return 0;
 }
 
-static int iwl_mvm_ftm_start_v12(struct iwl_mvm *mvm,
-				 struct ieee80211_vif *vif,
-				 struct cfg80211_pmsr_request *req)
+static int noinline_for_stack
+iwl_mvm_ftm_start_v12(struct iwl_mvm *mvm,
+		      struct ieee80211_vif *vif,
+		      struct cfg80211_pmsr_request *req)
 {
 	struct iwl_tof_range_req_cmd_v12 cmd;
 	struct iwl_host_cmd hcmd = {
@@ -816,9 +842,10 @@ static int iwl_mvm_ftm_start_v12(struct iwl_mvm *mvm,
 	return iwl_mvm_ftm_send_cmd(mvm, &hcmd);
 }
 
-static int iwl_mvm_ftm_start_v13(struct iwl_mvm *mvm,
-				 struct ieee80211_vif *vif,
-				 struct cfg80211_pmsr_request *req)
+static int noinline_for_stack
+iwl_mvm_ftm_start_v13(struct iwl_mvm *mvm,
+		      struct ieee80211_vif *vif,
+		      struct cfg80211_pmsr_request *req)
 {
 	struct iwl_tof_range_req_cmd_v13 cmd;
 	struct iwl_host_cmd hcmd = {
@@ -881,11 +908,13 @@ iwl_mvm_ftm_put_target_v10(struct iwl_mvm *mvm, struct ieee80211_vif *vif,
 	iwl_mvm_ftm_set_target_flags(mvm, peer, &target->initiator_ap_flags);
 	iwl_mvm_ftm_set_sta(mvm, vif, peer, &target->sta_id,
 			    &target->initiator_ap_flags);
-	iwl_mvm_ftm_set_secured_ranging(mvm, vif, target->bssid,
-					&target->cipher, target->hltk,
-					target->tk, target->rx_pn,
-					target->tx_pn,
-					&target->initiator_ap_flags);
+	ret = iwl_mvm_ftm_set_secured_ranging(mvm, vif, target->bssid,
+					      &target->cipher, target->hltk,
+					      target->tk, target->rx_pn,
+					      target->tx_pn,
+					      &target->initiator_ap_flags);
+	if (ret)
+		return ret;
 
 	i2r_max_sts = IWL_MVM_FTM_I2R_MAX_STS > 1 ? 1 :
 		IWL_MVM_FTM_I2R_MAX_STS;
@@ -930,9 +959,10 @@ iwl_mvm_ftm_put_target_v10(struct iwl_mvm *mvm, struct ieee80211_vif *vif,
 	return 0;
 }
 
-static int iwl_mvm_ftm_start_v14(struct iwl_mvm *mvm,
-				 struct ieee80211_vif *vif,
-				 struct cfg80211_pmsr_request *req)
+static int noinline_for_stack
+iwl_mvm_ftm_start_v14(struct iwl_mvm *mvm,
+		      struct ieee80211_vif *vif,
+		      struct cfg80211_pmsr_request *req)
 {
 	struct iwl_tof_range_req_cmd cmd;
 	struct iwl_host_cmd hcmd = {

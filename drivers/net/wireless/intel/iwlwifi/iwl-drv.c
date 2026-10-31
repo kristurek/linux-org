@@ -492,13 +492,16 @@ static void set_sec_offset(struct iwl_firmware_pieces *pieces,
  * Gets uCode section from tlv.
  */
 static int iwl_store_ucode_sec(struct fw_img_parsing *img,
-			       const void *data, int size)
+			       const void *data, size_t size)
 {
 	struct fw_sec *sec;
 	const struct fw_sec_parsing *sec_parse;
 	size_t alloc_size;
 
 	if (WARN_ON(!img || !data))
+		return -EINVAL;
+
+	if (size < sizeof(sec_parse->offset))
 		return -EINVAL;
 
 	sec_parse = (const struct fw_sec_parsing *)data;
@@ -804,6 +807,7 @@ static int iwl_parse_tlv_firmware(struct iwl_drv *drv,
 	u32 build, paging_mem_size;
 	int num_of_cpus;
 	bool usniffer_req = false;
+	size_t aligned_tlv_len;
 
 	if (len < sizeof(*ucode)) {
 		IWL_ERR(drv, "uCode has invalid length: %zd\n", len);
@@ -852,8 +856,16 @@ static int iwl_parse_tlv_firmware(struct iwl_drv *drv,
 				len, tlv_len);
 			return -EINVAL;
 		}
-		len -= ALIGN(tlv_len, 4);
-		data += sizeof(*tlv) + ALIGN(tlv_len, 4);
+
+		aligned_tlv_len = ALIGN(tlv_len, 4);
+		if (len < aligned_tlv_len) {
+			IWL_ERR(drv, "invalid aligned TLV len: %zd/%zu\n",
+				len, aligned_tlv_len);
+			return -EINVAL;
+		}
+
+		len -= aligned_tlv_len;
+		data += sizeof(*tlv) + aligned_tlv_len;
 
 		switch (tlv_type) {
 		case IWL_UCODE_TLV_INST:
@@ -1091,10 +1103,17 @@ static int iwl_parse_tlv_firmware(struct iwl_drv *drv,
 			const struct iwl_fw_dbg_dest_tlv_v1 *dest_v1 = NULL;
 			u8 mon_mode;
 
+			if (tlv_len < sizeof(*pieces->dbg_dest_ver))
+				goto invalid_tlv_len;
+
 			pieces->dbg_dest_ver = (const u8 *)tlv_data;
 			if (*pieces->dbg_dest_ver == 1) {
+				if (tlv_len < sizeof(*dest))
+					goto invalid_tlv_len;
 				dest = (const void *)tlv_data;
 			} else if (*pieces->dbg_dest_ver == 0) {
+				if (tlv_len < sizeof(*dest_v1))
+					goto invalid_tlv_len;
 				dest_v1 = (const void *)tlv_data;
 			} else {
 				IWL_ERR(drv,
@@ -2027,8 +2046,6 @@ void iwl_drv_stop(struct iwl_drv *drv)
 	mutex_unlock(&iwlwifi_opmode_table_mtx);
 
 #ifdef CONFIG_IWLWIFI_DEBUGFS
-	iwl_trans_debugfs_cleanup(drv->trans);
-
 	debugfs_remove_recursive(drv->dbgfs_drv);
 #endif
 

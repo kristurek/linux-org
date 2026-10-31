@@ -12,7 +12,6 @@
 #include "fw-api.h"
 #include "time-event.h"
 #include "mvm.h"
-#include "iwl-io.h"
 #include "iwl-prph.h"
 
 /*
@@ -950,6 +949,11 @@ void iwl_mvm_rx_session_protect_notif(struct iwl_mvm *mvm,
 	int id = le32_to_cpu(notif->mac_link_id);
 	struct ieee80211_vif *vif;
 	struct iwl_mvm_vif *mvmvif;
+
+	if (IWL_FW_CHECK(mvm, id >= ARRAY_SIZE(mvm->vif_id_to_mac),
+			 "Invalid mac_link_id (%d) in session protect notif\n",
+			 id))
+		return;
 
 	rcu_read_lock();
 
